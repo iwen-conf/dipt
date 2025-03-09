@@ -6,10 +6,12 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 	"github.com/schollz/progressbar/v3"
@@ -21,6 +23,12 @@ type Config struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	} `json:"registry"`
+}
+
+// Platform 定义平台信息
+type Platform struct {
+	OS   string
+	Arch string
 }
 
 // loadConfig 读取和解析 config.json 文件
@@ -80,7 +88,7 @@ func (pr *progressReader) Close() error {
 }
 
 // pullAndSaveImage 拉取镜像并保存为 tar 文件，带进度显示
-func pullAndSaveImage(imageName, outputFile string, config Config) error {
+func pullAndSaveImage(imageName, outputFile string, platform Platform, config Config) error {
 	ref, err := name.ParseReference(imageName)
 	if err != nil {
 		return fmt.Errorf("解析镜像名称失败: %v", err)
@@ -96,7 +104,15 @@ func pullAndSaveImage(imageName, outputFile string, config Config) error {
 		auth = authn.Anonymous
 	}
 
-	desc, err := remote.Get(ref, remote.WithAuth(auth))
+	options := []remote.Option{remote.WithAuth(auth)}
+
+	// 添加平台选项
+	options = append(options, remote.WithPlatform(v1.Platform{
+		OS:           platform.OS,
+		Architecture: platform.Arch,
+	}))
+
+	desc, err := remote.Get(ref, options...)
 	if err != nil {
 		return fmt.Errorf("获取镜像描述失败: %v", err)
 	}
@@ -126,7 +142,8 @@ func pullAndSaveImage(imageName, outputFile string, config Config) error {
 	)
 
 	rt := &progressRoundTripper{rt: http.DefaultTransport, bar: bar}
-	img, err = remote.Image(ref, remote.WithAuth(auth), remote.WithTransport(rt))
+	options = append(options, remote.WithTransport(rt))
+	img, err = remote.Image(ref, options...)
 	if err != nil {
 		return fmt.Errorf("拉取镜像失败: %v", err)
 	}
@@ -144,19 +161,81 @@ func pullAndSaveImage(imageName, outputFile string, config Config) error {
 
 	return nil
 }
-func main() {
-	// 检查命令行参数
-	if len(os.Args) < 2 || len(os.Args) > 3 {
-		fmt.Println("用法: go run main.go <镜像名称> [输出文件]")
-		fmt.Println("示例: go run main.go ubuntu:latest image.tar")
-		os.Exit(1)
+
+// 从镜像名称中提取软件名和版本
+func parseImageName(imageName string) (software, version string) {
+	parts := strings.Split(imageName, ":")
+	if len(parts) < 2 {
+		return parts[0], "latest"
 	}
 
-	// 获取镜像名称和输出文件路径
-	imageName := os.Args[1]
-	outputFile := "image.tar"
-	if len(os.Args) == 3 {
-		outputFile = os.Args[2]
+	// 处理软件名称中可能包含的路径
+	nameParts := strings.Split(parts[0], "/")
+	software = nameParts[len(nameParts)-1]
+
+	return software, parts[1]
+}
+
+func generateOutputFileName(imageName string, platform Platform) string {
+	software, version := parseImageName(imageName)
+	return fmt.Sprintf("%s_%s_%s_%s.tar", software, version, platform.OS, platform.Arch)
+}
+
+func parseArgs() (imageName string, outputFile string, platform Platform, err error) {
+	args := os.Args[1:]
+	if len(args) == 0 {
+		return "", "", Platform{}, fmt.Errorf("用法: dipt [-os <系统>] [-arch <架构>] <镜像名称> [输出文件]")
+	}
+
+	// 设置默认值
+	platform = Platform{
+		OS:   runtime.GOOS,
+		Arch: runtime.GOARCH,
+	}
+
+	// 解析参数
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-os":
+			if i+1 >= len(args) {
+				return "", "", Platform{}, fmt.Errorf("-os 参数需要指定系统名称")
+			}
+			platform.OS = args[i+1]
+			i++
+		case "-arch":
+			if i+1 >= len(args) {
+				return "", "", Platform{}, fmt.Errorf("-arch 参数需要指定架构名称")
+			}
+			platform.Arch = args[i+1]
+			i++
+		default:
+			// 如果不是选项参数，则认为是镜像名称或输出文件
+			if imageName == "" {
+				imageName = args[i]
+			} else {
+				outputFile = args[i]
+			}
+		}
+	}
+
+	if imageName == "" {
+		return "", "", Platform{}, fmt.Errorf("必须指定镜像名称")
+	}
+
+	// 如果没有指定输出文件，则根据镜像信息生成
+	if outputFile == "" {
+		outputFile = generateOutputFileName(imageName, platform)
+	}
+
+	return imageName, outputFile, platform, nil
+}
+
+func main() {
+	imageName, outputFile, platform, err := parseArgs()
+	if err != nil {
+		fmt.Println("错误:", err)
+		fmt.Println("示例: dipt -os linux -arch amd64 nginx:latest [output.tar]")
+		os.Exit(1)
 	}
 
 	// 加载配置文件
@@ -167,11 +246,12 @@ func main() {
 	}
 
 	// 拉取镜像并保存
-	fmt.Printf("正在拉取镜像 %s...\n", imageName)
-	err = pullAndSaveImage(imageName, outputFile, config)
+	fmt.Printf("正在拉取镜像 %s (系统: %s, 架构: %s)...\n", imageName, platform.OS, platform.Arch)
+	err = pullAndSaveImage(imageName, outputFile, platform, config)
 	if err != nil {
 		fmt.Println("错误:", err)
 		os.Exit(1)
 	}
-	fmt.Printf("镜像已保存到 %s\n", outputFile)
+
+	fmt.Printf("\n镜像已保存到 %s\n", outputFile)
 }
