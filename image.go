@@ -17,7 +17,7 @@ import (
 func pullAndSaveImage(imageName, outputFile string, platform Platform, config Config) error {
 	ref, err := name.ParseReference(imageName)
 	if err != nil {
-		return fmt.Errorf("解析镜像名称失败: %v", err)
+		return NewImageNotFoundError(imageName, err)
 	}
 
 	var auth authn.Authenticator
@@ -40,12 +40,26 @@ func pullAndSaveImage(imageName, outputFile string, platform Platform, config Co
 
 	desc, err := remote.Get(ref, options...)
 	if err != nil {
-		return fmt.Errorf("获取镜像描述失败: %v", err)
+		if IsManifestUnknownError(err) {
+			// 检查是否是平台不支持的错误
+			return NewPlatformNotSupportedError(imageName, platform.OS, platform.Arch, err)
+		} else if IsUnauthorizedError(err) {
+			// 检查是否是认证错误
+			return NewUnauthorizedError(ref.Context().RegistryStr(), err)
+		} else if IsNetworkError(err) {
+			// 检查是否是网络错误
+			return NewNetworkError(err)
+		}
+		return NewImageNotFoundError(imageName, err)
 	}
 
 	img, err := desc.Image()
 	if err != nil {
-		return fmt.Errorf("获取 v1.Image 失败: %v", err)
+		if IsPlatformNotSupportedError(err) {
+			// 检查是否是平台不支持的错误
+			return NewPlatformNotSupportedError(imageName, platform.OS, platform.Arch, err)
+		}
+		return fmt.Errorf("获取镜像失败: %v", err)
 	}
 
 	layers, err := img.Layers()
@@ -71,6 +85,13 @@ func pullAndSaveImage(imageName, outputFile string, platform Platform, config Co
 	options = append(options, remote.WithTransport(rt))
 	img, err = remote.Image(ref, options...)
 	if err != nil {
+		if IsPlatformNotSupportedError(err) {
+			return NewPlatformNotSupportedError(imageName, platform.OS, platform.Arch, err)
+		} else if IsUnauthorizedError(err) {
+			return NewUnauthorizedError(ref.Context().RegistryStr(), err)
+		} else if IsNetworkError(err) {
+			return NewNetworkError(err)
+		}
 		return fmt.Errorf("拉取镜像失败: %v", err)
 	}
 

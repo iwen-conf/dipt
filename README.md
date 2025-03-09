@@ -7,10 +7,11 @@
 - 🚀 无需安装 Docker 即可拉取镜像
 - 🔄 支持从公共或私有 Docker Registry 拉取镜像
 - 💾 将镜像保存为标准 tar 文件，可用于离线环境
-- �� 支持认证信息配置，可访问私有仓库
+- 🔐 支持认证信息配置，可访问私有仓库
 - 🎯 支持指定目标操作系统和架构
 - 📝 智能文件命名，自动包含镜像信息
 - 🛠️ 轻量级命令行工具，易于使用
+- ⚠️ 友好的错误提示，帮助快速定位问题
 
 ## 📥 安装
 
@@ -60,15 +61,79 @@ dipt -os linux -arch arm64 nginx:latest custom.tar
 可以通过 `-os` 和 `-arch` 参数指定目标平台：
 
 - 操作系统 (-os)：
-  - linux
-  - windows
-  - darwin (macOS)
+  - linux（最广泛支持）
+  - windows（部分镜像支持）
+  - darwin（部分镜像支持）
   
 - 架构 (-arch)：
-  - amd64 (x86_64)
+  - amd64 (x86_64)（最广泛支持）
   - arm64 (aarch64)
   - arm
   - 386 (x86)
+
+> ⚠️ **注意**：并非所有镜像都支持所有平台组合。例如：
+> - `mysql:latest` 不支持 windows 平台
+> - 某些镜像可能只支持特定的架构
+> - 建议优先使用 linux 平台的镜像，它们通常有最好的兼容性
+
+### 错误处理
+
+当遇到错误时，程序会提供清晰的错误信息。以下是一些常见错误及解决方案：
+
+1. 平台不支持
+```bash
+$ dipt -os windows -arch amd64 mysql:latest
+错误: 获取镜像描述失败: GET https://registry-1.docker.io/v2/library/mysql/manifests/latest: MANIFEST_UNKNOWN: manifest unknown
+```
+解决方案：
+- 检查镜像是否支持指定的平台
+- 使用 `linux` 平台替代
+- 尝试其他版本的镜像
+
+2. 镜像不存在
+```bash
+$ dipt nginx:nonexist
+错误: 获取镜像描述失败: GET https://registry-1.docker.io/v2/library/nginx/manifests/nonexist: MANIFEST_UNKNOWN: manifest unknown
+```
+解决方案：
+- 检查镜像名称和版本是否正确
+- 在 Docker Hub 或相应的镜像仓库中验证镜像是否存在
+
+3. 私有仓库认证失败
+```bash
+$ dipt private-registry.example.com/myapp:1.0
+错误: 获取镜像描述失败: GET https://private-registry.example.com/v2/myapp/manifests/1.0: UNAUTHORIZED: authentication required
+```
+解决方案：
+- 检查 `config.json` 文件是否存在且格式正确
+- 验证用户名和密码是否正确
+- 确认是否有权限访问该镜像
+
+4. 网络问题
+```bash
+$ dipt nginx:latest
+错误: 获取镜像描述失败: Get https://registry-1.docker.io/v2/: dial tcp: lookup registry-1.docker.io: no such host
+```
+解决方案：
+- 检查网络连接
+- 验证是否需要配置代理
+- 确认 DNS 解析是否正常
+
+### 最佳实践
+
+1. **平台选择**：
+   - 优先使用 `linux` 平台的镜像
+   - 对于 Windows 应用，确认镜像是否有 Windows 版本
+   - 选择与目标环境匹配的架构
+
+2. **版本选择**：
+   - 建议使用具体的版本号而不是 `latest` 标签
+   - 在生产环境中使用固定版本以确保稳定性
+
+3. **错误处理**：
+   - 遇到平台不支持错误时，先检查 Docker Hub 上的支持信息
+   - 保存错误信息以便故障排查
+   - 使用 `-os` 和 `-arch` 参数时要谨慎，确保目标平台受支持
 
 ### 使用私有仓库
 
@@ -113,6 +178,7 @@ dipt -os linux -arch amd64 private-registry.example.com/myapp:1.0
 - **🏷️ 智能命名**：自动生成包含完整信息的文件名
 - **⚡ 轻量级**：只依赖 Go 标准库和容器注册表交互库
 - **🔒 安全**：不需要 Docker daemon 权限
+- **❗ 错误处理**：提供清晰的错误信息和解决方案
 
 ## 📄 许可证
 

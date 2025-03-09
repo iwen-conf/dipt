@@ -24,9 +24,14 @@ func main() {
 	fmt.Printf("正在拉取镜像 %s (系统: %s, 架构: %s)...\n", imageName, platform.OS, platform.Arch)
 	err = pullAndSaveImage(imageName, outputFile, platform, config)
 	if err != nil {
-		fmt.Println("错误:", err)
+		if diptErr, ok := err.(*DiptError); ok {
+			// 使用自定义错误的格式化信息
+			fmt.Println("\n❌ 错误:", diptErr.Message)
+		} else {
+			fmt.Println("\n❌ 错误:", err)
+		}
 		os.Exit(1)
 	}
 
-	fmt.Printf("\n镜像已保存到 %s\n", outputFile)
+	fmt.Printf("\n✅ 镜像已保存到 %s\n", outputFile)
 }
