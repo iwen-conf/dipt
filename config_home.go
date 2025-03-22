@@ -9,9 +9,17 @@ import (
 
 // UserConfig 用户配置结构
 type UserConfig struct {
-	DefaultOS      string `json:"default_os"`       // 默认操作系统
-	DefaultArch    string `json:"default_arch"`     // 默认架构
-	DefaultSaveDir string `json:"default_save_dir"` // 默认保存目录
+	DefaultOS      string   `json:"default_os"`       // 默认操作系统
+	DefaultArch    string   `json:"default_arch"`     // 默认架构
+	DefaultSaveDir string   `json:"default_save_dir"` // 默认保存目录
+	Registry       Registry `json:"registry"`         // 镜像仓库配置
+}
+
+// Registry 镜像仓库配置
+type Registry struct {
+	Mirrors  []string `json:"mirrors,omitempty"`  // 镜像加速器列表
+	Username string   `json:"username,omitempty"` // 用户名
+	Password string   `json:"password,omitempty"` // 密码
 }
 
 const configFileName = ".dipt_config"
@@ -81,8 +89,14 @@ func setConfigValue(key, value string) error {
 
 	switch key {
 	case "os":
+		if !isValidOS(value) {
+			return fmt.Errorf("不支持的操作系统: %s", value)
+		}
 		config.DefaultOS = value
 	case "arch":
+		if !isValidArch(value) {
+			return fmt.Errorf("不支持的架构: %s", value)
+		}
 		config.DefaultArch = value
 	case "save_dir":
 		// 验证目录是否存在
@@ -99,9 +113,94 @@ func setConfigValue(key, value string) error {
 			return fmt.Errorf("转换路径失败: %v", err)
 		}
 		config.DefaultSaveDir = absPath
+	case "mirror":
+		return fmt.Errorf("请使用 mirror 相关的子命令管理镜像加速器:\n" +
+			"  dipt mirror list          # 列出所有镜像加速器\n" +
+			"  dipt mirror add <URL>     # 添加镜像加速器\n" +
+			"  dipt mirror del <URL>     # 删除镜像加速器\n" +
+			"  dipt mirror clear         # 清空所有镜像加速器")
 	default:
 		return fmt.Errorf("未知的配置项: %s", key)
 	}
 
 	return saveUserConfig(config)
+}
+
+// handleMirrorCommand 处理镜像加速器相关命令
+func handleMirrorCommand(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("缺少子命令，可用命令：list, add, del, clear")
+	}
+
+	config, err := loadUserConfig()
+	if err != nil {
+		return err
+	}
+
+	switch args[0] {
+	case "list":
+		if len(config.Registry.Mirrors) == 0 {
+			fmt.Println("当前未配置任何镜像加速器")
+			return nil
+		}
+		fmt.Println("已配置的镜像加速器：")
+		for i, mirror := range config.Registry.Mirrors {
+			fmt.Printf("%d. %s\n", i+1, mirror)
+		}
+
+	case "add":
+		if len(args) != 2 {
+			return fmt.Errorf("用法: dipt mirror add <URL>")
+		}
+		mirror := args[1]
+		// 检查是否已存在
+		for _, m := range config.Registry.Mirrors {
+			if m == mirror {
+				return fmt.Errorf("镜像加速器已存在: %s", mirror)
+			}
+		}
+		config.Registry.Mirrors = append(config.Registry.Mirrors, mirror)
+		err = saveUserConfig(config)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("✅ 已添加镜像加速器: %s\n", mirror)
+
+	case "del":
+		if len(args) != 2 {
+			return fmt.Errorf("用法: dipt mirror del <URL>")
+		}
+		mirror := args[1]
+		found := false
+		newMirrors := make([]string, 0)
+		for _, m := range config.Registry.Mirrors {
+			if m != mirror {
+				newMirrors = append(newMirrors, m)
+			} else {
+				found = true
+			}
+		}
+		if !found {
+			return fmt.Errorf("未找到指定的镜像加速器: %s", mirror)
+		}
+		config.Registry.Mirrors = newMirrors
+		err = saveUserConfig(config)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("✅ 已删除镜像加速器: %s\n", mirror)
+
+	case "clear":
+		config.Registry.Mirrors = []string{}
+		err = saveUserConfig(config)
+		if err != nil {
+			return err
+		}
+		fmt.Println("✅ 已清空所有镜像加速器")
+
+	default:
+		return fmt.Errorf("未知的子命令: %s", args[0])
+	}
+
+	return nil
 }

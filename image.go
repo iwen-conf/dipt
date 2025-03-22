@@ -38,26 +38,50 @@ func pullAndSaveImage(imageName, outputFile string, platform Platform, config Co
 		Architecture: platform.Arch,
 	}))
 
+	// 尝试使用配置的镜像加速器
+	var lastErr error
+	if len(config.Registry.Mirrors) > 0 && isDockerHubImage(ref) {
+		for _, mirror := range config.Registry.Mirrors {
+			mirrorRef, err := createMirrorRef(ref, mirror)
+			if err != nil {
+				continue
+			}
+
+			desc, err := remote.Get(mirrorRef, options...)
+			if err == nil {
+				ref = mirrorRef
+				fmt.Printf("使用镜像加速器: %s\n", mirror)
+				return downloadAndSaveImage(ref, outputFile, desc, options)
+			}
+			lastErr = err
+		}
+	}
+
+	// 如果镜像加速器都失败了，或者不是 Docker Hub 镜像，使用原始地址
 	desc, err := remote.Get(ref, options...)
 	if err != nil {
+		if lastErr != nil {
+			fmt.Printf("镜像加速器访问失败，尝试使用原始地址\n")
+		}
 		if IsManifestUnknownError(err) {
-			// 检查是否是平台不支持的错误
 			return NewPlatformNotSupportedError(imageName, platform.OS, platform.Arch, err)
 		} else if IsUnauthorizedError(err) {
-			// 检查是否是认证错误
 			return NewUnauthorizedError(ref.Context().RegistryStr(), err)
 		} else if IsNetworkError(err) {
-			// 检查是否是网络错误
 			return NewNetworkError(err)
 		}
 		return NewImageNotFoundError(imageName, err)
 	}
 
+	return downloadAndSaveImage(ref, outputFile, desc, options)
+}
+
+// downloadAndSaveImage 下载并保存镜像
+func downloadAndSaveImage(ref name.Reference, outputFile string, desc *remote.Descriptor, options []remote.Option) error {
 	img, err := desc.Image()
 	if err != nil {
 		if IsPlatformNotSupportedError(err) {
-			// 检查是否是平台不支持的错误
-			return NewPlatformNotSupportedError(imageName, platform.OS, platform.Arch, err)
+			return NewPlatformNotSupportedError(ref.Name(), "", "", err)
 		}
 		return fmt.Errorf("获取镜像失败: %v", err)
 	}
@@ -86,7 +110,7 @@ func pullAndSaveImage(imageName, outputFile string, platform Platform, config Co
 	img, err = remote.Image(ref, options...)
 	if err != nil {
 		if IsPlatformNotSupportedError(err) {
-			return NewPlatformNotSupportedError(imageName, platform.OS, platform.Arch, err)
+			return NewPlatformNotSupportedError(ref.Name(), "", "", err)
 		} else if IsUnauthorizedError(err) {
 			return NewUnauthorizedError(ref.Context().RegistryStr(), err)
 		} else if IsNetworkError(err) {
@@ -101,6 +125,29 @@ func pullAndSaveImage(imageName, outputFile string, platform Platform, config Co
 	}
 
 	return nil
+}
+
+// isDockerHubImage 判断是否是 Docker Hub 镜像
+func isDockerHubImage(ref name.Reference) bool {
+	registry := ref.Context().Registry.Name()
+	return registry == "docker.io" || registry == "registry-1.docker.io"
+}
+
+// createMirrorRef 创建镜像加速器引用
+func createMirrorRef(ref name.Reference, mirror string) (name.Reference, error) {
+	// 移除协议前缀
+	mirror = strings.TrimPrefix(mirror, "http://")
+	mirror = strings.TrimPrefix(mirror, "https://")
+	mirror = strings.TrimSuffix(mirror, "/")
+
+	// 获取原始镜像名称和标签
+	originalName := ref.Context().RepositoryStr()
+	originalName = strings.TrimPrefix(originalName, "library/")
+	tag := ref.Identifier()
+
+	// 构建新的引用
+	newRef := fmt.Sprintf("%s/%s:%s", mirror, originalName, tag)
+	return name.ParseReference(newRef)
 }
 
 // 从镜像名称中提取软件名和版本

@@ -13,6 +13,7 @@
 - 🛠️ 轻量级命令行工具，易于使用
 - ⚠️ 友好的错误提示，帮助快速定位问题
 - ⚙️ 支持交互式配置和默认值设置
+- 🚄 支持镜像加速器配置，提升下载速度
 
 ## 📥 安装
 
@@ -48,6 +49,68 @@ dipt -os linux -arch amd64 nginx:latest
 
 # 指定目标平台和自定义输出文件名
 dipt -os linux -arch arm64 nginx:latest custom.tar
+```
+
+### 镜像加速器管理
+
+DIPT 提供了命令行工具来管理镜像加速器，无需手动编辑配置文件：
+
+```bash
+# 列出所有配置的镜像加速器
+dipt mirror list
+
+# 添加新的镜像加速器
+dipt mirror add https://mirror.example.com
+
+# 删除指定的镜像加速器
+dipt mirror del https://mirror.example.com
+
+# 清空所有镜像加速器
+dipt mirror clear
+```
+
+默认提供以下镜像加速器：
+- https://registry.docker-cn.com
+- https://docker.mirrors.ustc.edu.cn
+- http://hub-mirror.c.163.com
+
+> 注意：镜像加速器仅对 Docker Hub 镜像有效，私有仓库镜像不会使用加速器。
+
+### 配置文件管理
+
+DIPT 支持两种配置文件：
+
+1. 全局配置文件：`~/.dipt_config`
+   - 存储默认设置和全局镜像加速器配置
+   - 由 `dipt set` 和 `dipt mirror` 命令管理
+
+2. 项目配置文件：`./config.json`
+   - 存储项目特定的配置，如私有仓库认证信息
+   - 可以使用 `dipt -conf new` 生成模板
+
+配置文件优先级：
+- 优先使用当前目录下的 `config.json`
+- 如果当前目录没有配置文件，则使用 `~/.dipt_config`
+
+生成配置模板：
+```bash
+# 在当前目录生成配置文件模板
+dipt -conf new
+```
+
+示例配置文件格式：
+```json
+{
+  "registry": {
+    "mirrors": [
+      "https://registry.docker-cn.com",
+      "https://docker.mirrors.ustc.edu.cn",
+      "http://hub-mirror.c.163.com"
+    ],
+    "username": "your-username",
+    "password": "your-password"
+  }
+}
 ```
 
 ### 文件命名规则
@@ -131,9 +194,14 @@ $ dipt nginx:latest
    - 建议使用具体的版本号而不是 `latest` 标签
    - 在生产环境中使用固定版本以确保稳定性
 
-3. **错误处理**：
+3. **镜像加速**：
+   - 对于 Docker Hub 镜像，建议配置镜像加速器
+   - 选择延迟最低的镜像加速器
+   - 可以配置多个加速器作为备用
+
+4. **错误处理**：
    - 遇到平台不支持错误时，先检查 Docker Hub 上的支持信息
-   - 保存错误信息以便故障排查
+   - 如果镜像拉取速度慢，尝试使用镜像加速器
    - 使用 `-os` 和 `-arch` 参数时要谨慎，确保目标平台受支持
 
 ### 使用私有仓库
