@@ -19,6 +19,7 @@ vendor/
 *.zip
 *.tar
 *.tar.gz
+/build
 
 # 配置文件（可能包含敏感信息）
 config.json

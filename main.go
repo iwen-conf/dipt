@@ -13,12 +13,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 加载配置文件
-	config, err := loadConfig("config.json")
+	// 只加载 ~/.dipt_config
+	userConfig, err := loadUserConfig()
 	if err != nil {
 		fmt.Println("错误:", err)
 		os.Exit(1)
 	}
+	// 转换为 Config 结构体
+	var config Config
+	config.Registry.Mirrors = userConfig.Registry.Mirrors
+	config.Registry.Username = userConfig.Registry.Username
+	config.Registry.Password = userConfig.Registry.Password
 
 	// 拉取镜像并保存
 	fmt.Printf("正在拉取镜像 %s (系统: %s, 架构: %s)...\n", imageName, platform.OS, platform.Arch)
