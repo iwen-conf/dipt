@@ -67,6 +67,9 @@ dipt mirror del https://mirror.example.com
 
 # 清空所有镜像加速器
 dipt mirror clear
+
+# 测试镜像加速器连通性
+dipt mirror test https://mirror.example.com
 ```
 
 默认提供以下镜像加速器：
