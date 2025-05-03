@@ -154,14 +154,20 @@ func createMirrorRef(ref name.Reference, mirror string) (name.Reference, error) 
 func parseImageName(imageName string) (software, version string) {
 	parts := strings.Split(imageName, ":")
 	if len(parts) < 2 {
-		return parts[0], "latest"
+		return cleanSoftwareName(parts[0]), "latest"
 	}
 
 	// 处理软件名称中可能包含的路径
-	nameParts := strings.Split(parts[0], "/")
-	software = nameParts[len(nameParts)-1]
+	software = cleanSoftwareName(parts[0])
 
 	return software, parts[1]
+}
+
+// cleanSoftwareName 处理软件名称，替换斜杠为下划线，避免被当作目录分隔符
+func cleanSoftwareName(name string) string {
+	// 替换所有斜杠为下划线
+	name = strings.ReplaceAll(name, "/", "_")
+	return name
 }
 
 // generateOutputFileName 生成输出文件名
