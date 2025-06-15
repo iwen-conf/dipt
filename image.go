@@ -63,6 +63,38 @@ func pullAndSaveImage(imageName, outputFile string, platform Platform, config Co
 		if lastErr != nil {
 			fmt.Printf("镜像加速器访问失败，尝试使用原始地址\n")
 		}
+
+		// 特殊处理 docker.dragonflydb.io 的情况
+		if strings.Contains(err.Error(), "ghcr.io") && strings.Contains(imageName, "docker.dragonflydb.io") {
+			fmt.Printf("检测到 docker.dragonflydb.io 重定向到 ghcr.io，尝试直接使用 ghcr.io 地址...\n")
+			// 将 docker.dragonflydb.io 替换为 ghcr.io
+			newImageName := strings.Replace(imageName, "docker.dragonflydb.io", "ghcr.io", 1)
+			newRef, parseErr := name.ParseReference(newImageName)
+			if parseErr == nil {
+				desc, err = remote.Get(newRef, options...)
+				if err == nil {
+					ref = newRef
+					fmt.Printf("成功使用 ghcr.io 地址: %s\n", newImageName)
+					return downloadAndSaveImage(ref, outputFile, desc, options)
+				}
+			}
+		}
+
+		// 特殊处理 GitHub Container Registry 的认证问题
+		registry := ref.Context().Registry.Name()
+		if (registry == "ghcr.io" || strings.Contains(imageName, "docker.dragonflydb.io")) && strings.Contains(err.Error(), "DENIED") {
+			return &DiptError{
+				Type: ErrorUnauthorized,
+				Message: fmt.Sprintf("访问 GitHub Container Registry 需要认证\n建议：\n"+
+					"1. 对于 DragonflyDB，请使用正确的镜像地址: ghcr.io/dragonflydb/dragonfly:latest\n"+
+					"2. GitHub Container Registry 可能需要 GitHub Personal Access Token\n"+
+					"3. 在 config.json 中配置 GitHub 用户名和 Personal Access Token\n"+
+					"4. 或者尝试使用 Docker Hub 上的替代镜像\n"+
+					"原始错误: %v", err),
+				Err: err,
+			}
+		}
+
 		if IsManifestUnknownError(err) {
 			return NewPlatformNotSupportedError(imageName, platform.OS, platform.Arch, err)
 		} else if IsUnauthorizedError(err) {
