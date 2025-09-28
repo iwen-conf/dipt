@@ -1,6 +1,7 @@
 package main
 
 import (
+    "bytes"
     "context"
     "fmt"
     "net/http"
@@ -125,27 +126,17 @@ func pullAndSaveImage(imageName, outputFile string, platform Platform, config Co
 
 // downloadAndSaveImage 下载并保存镜像
 func downloadAndSaveImage(ref name.Reference, outputFile string, desc *remote.Descriptor, options []remote.Option) error {
-	img, err := desc.Image()
-	if err != nil {
-		if IsPlatformNotSupportedError(err) {
-			return NewPlatformNotSupportedError(ref.Name(), "", "", err)
-		}
-		return fmt.Errorf("获取镜像失败: %v", err)
-	}
+    // 通过 Manifest 精确计算需要下载的总字节数（包含 config 与各层的压缩大小）
+    m, err := v1.ParseManifest(bytes.NewReader(desc.Manifest))
+    if err != nil {
+        return fmt.Errorf("获取镜像清单失败: %v", err)
+    }
 
-	layers, err := img.Layers()
-	if err != nil {
-		return fmt.Errorf("获取层信息失败: %v", err)
-	}
-
-	var totalSize int64
-	for _, layer := range layers {
-		size, err := layer.Size()
-		if err != nil {
-			return fmt.Errorf("获取层大小失败: %v", err)
-		}
-		totalSize += size
-	}
+    var totalSize int64
+    totalSize += m.Config.Size
+    for _, l := range m.Layers {
+        totalSize += l.Size
+    }
 
 	bar := progressbar.NewOptions64(totalSize,
 		progressbar.OptionSetDescription("拉取镜像中"),
@@ -154,7 +145,7 @@ func downloadAndSaveImage(ref name.Reference, outputFile string, desc *remote.De
 
 	rt := &progressRoundTripper{rt: http.DefaultTransport, bar: bar}
 	options = append(options, remote.WithTransport(rt))
-    img, err = remote.Image(ref, options...)
+    img, err := remote.Image(ref, options...)
     if err != nil {
         if IsPlatformNotSupportedError(err) {
             return NewPlatformNotSupportedError(ref.Name(), "", "", err)
@@ -166,12 +157,13 @@ func downloadAndSaveImage(ref name.Reference, outputFile string, desc *remote.De
         return fmt.Errorf("拉取镜像失败: %v", err)
     }
 
-	err = tarball.WriteToFile(outputFile, ref, img)
-	if err != nil {
-		return fmt.Errorf("保存镜像到 tar 文件失败: %v", err)
-	}
-
-	return nil
+    err = tarball.WriteToFile(outputFile, ref, img)
+    if err != nil {
+        return fmt.Errorf("保存镜像到 tar 文件失败: %v", err)
+    }
+    // 结束进度条
+    _ = bar.Finish()
+    return nil
 }
 
 // isDockerHubImage 判断是否是 Docker Hub 镜像
