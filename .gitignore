@@ -25,7 +25,7 @@ vendor/
 config.json
 
 # IDE相关文件
-../dip/.idea/
+.idea/
 .vscode/
 *.swp
 *.swo

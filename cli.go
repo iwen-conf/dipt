@@ -1,26 +1,26 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"os"
-	"path/filepath"
+    "encoding/json"
+    "fmt"
+    "os"
+    "path/filepath"
 )
 
-// parseArgs 解析命令行参数
-func parseArgs() (imageName string, outputFile string, platform Platform, err error) {
-	args := os.Args[1:]
-	if len(args) == 0 {
-		return "", "", Platform{}, fmt.Errorf("用法:\n" +
-			"拉取镜像: dipt [-os <系统>] [-arch <架构>] <镜像名称> [输出文件]\n" +
-			"设置默认值: dipt set <os|arch|save_dir> <值>\n" +
-			"生成配置模板: dipt -conf new\n" +
-			"镜像加速器管理:\n" +
-			"  dipt mirror list          # 列出所有镜像加速器\n" +
-			"  dipt mirror add <URL>     # 添加镜像加速器\n" +
-			"  dipt mirror del <URL>     # 删除镜像加速器\n" +
-			"  dipt mirror clear         # 清空所有镜像加速器")
-	}
+// parseArgs 解析命令行参数（使用传入的默认配置用于缺省值）
+func parseArgs(defaults *UserConfig) (imageName string, outputFile string, platform Platform, err error) {
+    args := os.Args[1:]
+    if len(args) == 0 {
+        return "", "", Platform{}, fmt.Errorf("用法:\n" +
+            "拉取镜像: dipt [-os <系统>] [-arch <架构>] <镜像名称> [输出文件]\n" +
+            "设置默认值: dipt set <os|arch|save_dir> <值>\n" +
+            "生成配置模板: dipt -conf new\n" +
+            "镜像加速器管理:\n" +
+            "  dipt mirror list          # 列出所有镜像加速器\n" +
+            "  dipt mirror add <URL>     # 添加镜像加速器\n" +
+            "  dipt mirror del <URL>     # 删除镜像加速器\n" +
+            "  dipt mirror clear         # 清空所有镜像加速器")
+    }
 
 	// 处理生成配置模板命令
 	if len(args) == 2 && args[0] == "-conf" && args[1] == "new" {
@@ -53,17 +53,11 @@ func parseArgs() (imageName string, outputFile string, platform Platform, err er
 		os.Exit(0)
 	}
 
-	// 加载用户配置
-	userConfig, err := loadUserConfig()
-	if err != nil {
-		return "", "", Platform{}, fmt.Errorf("加载用户配置失败: %v", err)
-	}
-
-	// 设置默认值
-	platform = Platform{
-		OS:   userConfig.DefaultOS,
-		Arch: userConfig.DefaultArch,
-	}
+    // 设置默认值
+    platform = Platform{
+        OS:   defaults.DefaultOS,
+        Arch: defaults.DefaultArch,
+    }
 
 	// 解析参数
 	for i := 0; i < len(args); i++ {
@@ -94,13 +88,13 @@ func parseArgs() (imageName string, outputFile string, platform Platform, err er
 		return "", "", Platform{}, fmt.Errorf("必须指定镜像名称")
 	}
 
-	// 如果没有指定输出文件，则根据镜像信息生成并放在默认保存目录
-	if outputFile == "" {
-		outputFile = generateOutputFileName(imageName, platform)
-		outputFile = filepath.Join(userConfig.DefaultSaveDir, outputFile)
-	}
+    // 如果没有指定输出文件，则根据镜像信息生成并放在默认保存目录
+    if outputFile == "" {
+        outputFile = generateOutputFileName(imageName, platform)
+        outputFile = filepath.Join(defaults.DefaultSaveDir, outputFile)
+    }
 
-	return imageName, outputFile, platform, nil
+    return imageName, outputFile, platform, nil
 }
 
 // generateConfigTemplate 生成配置文件模板

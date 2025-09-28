@@ -1,12 +1,15 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
+    "encoding/json"
+    "fmt"
+    "net/http"
+    "os"
+    "path/filepath"
+    "strings"
+    "time"
+
+    "golang.org/x/term"
 )
 
 // UserConfig 用户配置结构
@@ -37,16 +40,47 @@ func getConfigFilePath() (string, error) {
 
 // loadUserConfig 加载用户配置
 func loadUserConfig() (*UserConfig, error) {
-	configPath, err := getConfigFilePath()
-	if err != nil {
-		return nil, err
-	}
+    configPath, err := getConfigFilePath()
+    if err != nil {
+        return nil, err
+    }
 
-	// 如果配置文件不存在，启动交互式配置
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		fmt.Printf("未检测到配置文件 %s\n", configPath)
-		return interactiveConfig()
-	}
+    // 如果配置文件不存在，启动交互式配置
+    if _, err := os.Stat(configPath); os.IsNotExist(err) {
+        // 支持在非交互环境或设置了禁用交互时，使用默认配置
+        noInteractive := os.Getenv("DIPT_NO_INTERACTIVE") == "1"
+        isTTY := term.IsTerminal(int(os.Stdin.Fd()))
+        if noInteractive || !isTTY {
+            // 从环境变量读取默认值，否则使用内置默认
+            defOS := os.Getenv("DIPT_DEFAULT_OS")
+            if defOS == "" {
+                defOS = "linux"
+            }
+            defArch := os.Getenv("DIPT_DEFAULT_ARCH")
+            if defArch == "" {
+                defArch = "amd64"
+            }
+            homeDir, _ := os.UserHomeDir()
+            defSave := os.Getenv("DIPT_DEFAULT_SAVE_DIR")
+            if defSave == "" {
+                defSave = filepath.Join(homeDir, "DockerImages")
+            }
+
+            // 确保目录存在
+            _ = os.MkdirAll(defSave, 0755)
+
+            cfg := &UserConfig{
+                DefaultOS:      defOS,
+                DefaultArch:    defArch,
+                DefaultSaveDir: defSave,
+            }
+            // 尝试落盘但不阻塞
+            _ = saveUserConfig(cfg)
+            return cfg, nil
+        }
+        fmt.Printf("未检测到配置文件 %s\n", configPath)
+        return interactiveConfig()
+    }
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -200,12 +234,12 @@ func handleMirrorCommand(args []string) error {
 		}
 		fmt.Println("✅ 已清空所有镜像加速器")
 
-	case "test":
-		if len(args) != 2 {
-			return fmt.Errorf("用法: dipt mirror test <URL>")
-		}
-		mirror := args[1]
-		url := mirror
+    case "test":
+        if len(args) != 2 {
+            return fmt.Errorf("用法: dipt mirror test <URL>")
+        }
+        mirror := args[1]
+        url := mirror
 		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 			url = "https://" + url
 		}
@@ -216,13 +250,14 @@ func handleMirrorCommand(args []string) error {
 				url = url + "/v2/"
 			}
 		}
-		fmt.Printf("正在测试镜像加速器连通性: %s ...\n", url)
-		resp, err := http.Get(url)
-		if err != nil {
-			fmt.Printf("❌ 连接失败: %v\n", err)
-			return nil
-		}
-		defer resp.Body.Close()
+        fmt.Printf("正在测试镜像加速器连通性: %s ...\n", url)
+        client := &http.Client{Timeout: 5 * time.Second}
+        resp, err := client.Get(url)
+        if err != nil {
+            fmt.Printf("❌ 连接失败: %v\n", err)
+            return nil
+        }
+        defer resp.Body.Close()
 		fmt.Printf("返回状态码: %d\n", resp.StatusCode)
 		fmt.Println("响应头:")
 		for k, v := range resp.Header {
@@ -248,4 +283,79 @@ func handleMirrorCommand(args []string) error {
 	}
 
 	return nil
+}
+
+// loadProjectConfig 加载项目级配置 ./config.json（如果存在）
+func loadProjectConfig() (*Config, error) {
+    data, err := os.ReadFile("config.json")
+    if err != nil {
+        if os.IsNotExist(err) {
+            return nil, nil
+        }
+        return nil, fmt.Errorf("读取项目配置失败: %v", err)
+    }
+    var cfg Config
+    if err := json.Unmarshal(data, &cfg); err != nil {
+        return nil, fmt.Errorf("解析项目配置失败: %v", err)
+    }
+    return &cfg, nil
+}
+
+// effectiveRegistry 合并生效的 Registry（优先级：环境变量 > 项目配置 > 用户配置）
+func effectiveRegistry(user *UserConfig, project *Config) Config {
+    var out Config
+    // 先复制用户配置
+    if user != nil {
+        out.Registry.Mirrors = append(out.Registry.Mirrors, user.Registry.Mirrors...)
+        out.Registry.Username = user.Registry.Username
+        out.Registry.Password = user.Registry.Password
+    }
+    // 项目配置覆盖
+    if project != nil {
+        if len(project.Registry.Mirrors) > 0 {
+            out.Registry.Mirrors = project.Registry.Mirrors
+        }
+        if project.Registry.Username != "" {
+            out.Registry.Username = project.Registry.Username
+        }
+        if project.Registry.Password != "" {
+            out.Registry.Password = project.Registry.Password
+        }
+    }
+    // 环境变量最终覆盖
+    if u := os.Getenv("DIPT_REGISTRY_USERNAME"); u != "" {
+        out.Registry.Username = u
+    }
+    if p := os.Getenv("DIPT_REGISTRY_PASSWORD"); p != "" {
+        out.Registry.Password = p
+    }
+    if m := os.Getenv("DIPT_REGISTRY_MIRRORS"); m != "" {
+        // 逗号分隔
+        parts := strings.Split(m, ",")
+        mirrors := make([]string, 0, len(parts))
+        for _, s := range parts {
+            s = strings.TrimSpace(s)
+            if s != "" {
+                mirrors = append(mirrors, s)
+            }
+        }
+        if len(mirrors) > 0 {
+            out.Registry.Mirrors = mirrors
+        }
+    }
+    return out
+}
+
+// loadEffectiveConfigs 载入用户配置与项目配置，并返回合并后的 Registry 配置
+func loadEffectiveConfigs() (*UserConfig, Config, error) {
+    userCfg, err := loadUserConfig()
+    if err != nil {
+        return nil, Config{}, err
+    }
+    projCfg, err := loadProjectConfig()
+    if err != nil {
+        return nil, Config{}, err
+    }
+    eff := effectiveRegistry(userCfg, projCfg)
+    return userCfg, eff, nil
 }

@@ -1,38 +1,36 @@
 package main
 
 import (
-	"fmt"
-	"os"
+    "fmt"
+    "os"
+    "path/filepath"
 )
 
 func main() {
-	imageName, outputFile, platform, err := parseArgs()
-	if err != nil {
-		fmt.Println("错误:", err)
-		fmt.Println("示例: dipt -os linux -arch amd64 nginx:latest [output.tar]")
-		os.Exit(1)
-	}
+    // 先加载用户与项目配置（支持非交互环境与 env 覆盖）
+    userConfig, effectiveRegistry, err := loadEffectiveConfigs()
+    if err != nil {
+        fmt.Println("错误:", err)
+        fmt.Println("示例: dipt -os linux -arch amd64 nginx:latest [output.tar]")
+        os.Exit(1)
+    }
+    imageName, outputFile, platform, err := parseArgs(userConfig)
+    if err != nil {
+        fmt.Println("错误:", err)
+        fmt.Println("示例: dipt -os linux -arch amd64 nginx:latest [output.tar]")
+        os.Exit(1)
+    }
 
-	// 只加载 ~/.dipt_config
-	userConfig, err := loadUserConfig()
-	if err != nil {
-		fmt.Println("错误:", err)
-		os.Exit(1)
-	}
-	// 转换为 Config 结构体
-	var config Config
-	config.Registry.Mirrors = userConfig.Registry.Mirrors
-	config.Registry.Username = userConfig.Registry.Username
-	config.Registry.Password = userConfig.Registry.Password
-
-	// 拉取镜像并保存
-	fmt.Printf("正在拉取镜像 %s (系统: %s, 架构: %s)...\n", imageName, platform.OS, platform.Arch)
-	err = pullAndSaveImage(imageName, outputFile, platform, config)
-	if err != nil {
-		if diptErr, ok := err.(*DiptError); ok {
-			// 使用自定义错误的格式化信息
-			fmt.Println("\n❌ 错误:", diptErr.Message)
-		} else {
+    // 拉取镜像并保存
+    fmt.Printf("正在拉取镜像 %s (系统: %s, 架构: %s)...\n", imageName, platform.OS, platform.Arch)
+    // 确保输出目录存在
+    _ = os.MkdirAll(filepath.Dir(outputFile), 0755)
+    err = pullAndSaveImage(imageName, outputFile, platform, effectiveRegistry)
+    if err != nil {
+        if diptErr, ok := err.(*DiptError); ok {
+            // 使用自定义错误的格式化信息
+            fmt.Println("\n❌ 错误:", diptErr.Message)
+        } else {
 			fmt.Println("\n❌ 错误:", err)
 		}
 		os.Exit(1)

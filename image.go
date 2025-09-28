@@ -1,24 +1,28 @@
 package main
 
 import (
-	"fmt"
-	"net/http"
-	"strings"
+    "context"
+    "fmt"
+    "net/http"
+    "os"
+    "strconv"
+    "strings"
+    "time"
 
-	"github.com/google/go-containerregistry/pkg/authn"
-	"github.com/google/go-containerregistry/pkg/name"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
-	"github.com/google/go-containerregistry/pkg/v1/tarball"
-	"github.com/schollz/progressbar/v3"
+    "github.com/google/go-containerregistry/pkg/authn"
+    "github.com/google/go-containerregistry/pkg/name"
+    v1 "github.com/google/go-containerregistry/pkg/v1"
+    "github.com/google/go-containerregistry/pkg/v1/remote"
+    "github.com/google/go-containerregistry/pkg/v1/tarball"
+    "github.com/schollz/progressbar/v3"
 )
 
 // pullAndSaveImage 拉取镜像并保存为 tar 文件，带进度显示
 func pullAndSaveImage(imageName, outputFile string, platform Platform, config Config) error {
-	ref, err := name.ParseReference(imageName)
-	if err != nil {
-		return NewImageNotFoundError(imageName, err)
-	}
+    ref, err := name.ParseReference(imageName)
+    if err != nil {
+        return NewImageNotFoundError(imageName, err)
+    }
 
 	var auth authn.Authenticator
 	if config.Registry.Username != "" && config.Registry.Password != "" {
@@ -30,7 +34,18 @@ func pullAndSaveImage(imageName, outputFile string, platform Platform, config Co
 		auth = authn.Anonymous
 	}
 
-	options := []remote.Option{remote.WithAuth(auth)}
+    options := []remote.Option{remote.WithAuth(auth)}
+
+    // 读取超时配置（秒），默认 120s
+    timeout := 120 * time.Second
+    if t := os.Getenv("DIPT_TIMEOUT"); t != "" {
+        if sec, perr := strconv.Atoi(t); perr == nil && sec > 0 {
+            timeout = time.Duration(sec) * time.Second
+        }
+    }
+    ctx, cancel := context.WithTimeout(context.Background(), timeout)
+    defer cancel()
+    options = append(options, remote.WithContext(ctx))
 
 	// 添加平台选项
 	options = append(options, remote.WithPlatform(v1.Platform{
@@ -58,11 +73,11 @@ func pullAndSaveImage(imageName, outputFile string, platform Platform, config Co
 	}
 
 	// 如果镜像加速器都失败了，或者不是 Docker Hub 镜像，使用原始地址
-	desc, err := remote.Get(ref, options...)
-	if err != nil {
-		if lastErr != nil {
-			fmt.Printf("镜像加速器访问失败，尝试使用原始地址\n")
-		}
+    desc, err := remote.Get(ref, options...)
+    if err != nil {
+        if lastErr != nil {
+            fmt.Printf("镜像加速器访问失败，尝试使用原始地址\n")
+        }
 
 		// 特殊处理 docker.dragonflydb.io 的情况
 		if strings.Contains(err.Error(), "ghcr.io") && strings.Contains(imageName, "docker.dragonflydb.io") {
@@ -139,17 +154,17 @@ func downloadAndSaveImage(ref name.Reference, outputFile string, desc *remote.De
 
 	rt := &progressRoundTripper{rt: http.DefaultTransport, bar: bar}
 	options = append(options, remote.WithTransport(rt))
-	img, err = remote.Image(ref, options...)
-	if err != nil {
-		if IsPlatformNotSupportedError(err) {
-			return NewPlatformNotSupportedError(ref.Name(), "", "", err)
-		} else if IsUnauthorizedError(err) {
-			return NewUnauthorizedError(ref.Context().RegistryStr(), err)
-		} else if IsNetworkError(err) {
-			return NewNetworkError(err)
-		}
-		return fmt.Errorf("拉取镜像失败: %v", err)
-	}
+    img, err = remote.Image(ref, options...)
+    if err != nil {
+        if IsPlatformNotSupportedError(err) {
+            return NewPlatformNotSupportedError(ref.Name(), "", "", err)
+        } else if IsUnauthorizedError(err) {
+            return NewUnauthorizedError(ref.Context().RegistryStr(), err)
+        } else if IsNetworkError(err) {
+            return NewNetworkError(err)
+        }
+        return fmt.Errorf("拉取镜像失败: %v", err)
+    }
 
 	err = tarball.WriteToFile(outputFile, ref, img)
 	if err != nil {

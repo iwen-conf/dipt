@@ -290,6 +290,16 @@ dipt -os windows -arch amd64 nginx:latest
 # 临时使用指定的平台，不会修改默认配置
 ```
 
+### 非交互与环境变量
+
+在 CI/脚本环境可以通过环境变量禁用交互并设置默认值：
+
+- `DIPT_NO_INTERACTIVE=1` 禁用首次运行交互配置
+- `DIPT_DEFAULT_OS`、`DIPT_DEFAULT_ARCH`、`DIPT_DEFAULT_SAVE_DIR` 设置默认平台与保存目录
+- `DIPT_REGISTRY_USERNAME`、`DIPT_REGISTRY_PASSWORD` 覆盖认证信息
+- `DIPT_REGISTRY_MIRRORS` 逗号分隔的镜像加速器列表
+- `DIPT_TIMEOUT` 网络请求超时（秒），默认 120
+
 ## ⚙️ 配置文件
 
 配置文件 `config.json` 应放在与程序相同的目录下，格式如下：

@@ -1,8 +1,11 @@
 package main
 
 import (
-	"fmt"
-	"strings"
+    "errors"
+    "fmt"
+    "strings"
+
+    "github.com/google/go-containerregistry/pkg/v1/remote/transport"
 )
 
 // ErrorType 定义错误类型
@@ -56,15 +59,15 @@ func NewImageNotFoundError(imageName string, err error) *DiptError {
 
 // NewUnauthorizedError 创建未授权错误
 func NewUnauthorizedError(registry string, err error) *DiptError {
-	return &DiptError{
-		Type: ErrorUnauthorized,
-		Message: fmt.Sprintf("访问镜像仓库 %s 未授权\n建议：\n"+
-			"1. 检查 config.json 文件是否存在且格式正确\n"+
-			"2. 验证用户名和密码是否正确\n"+
-			"3. 确认是否有权限访问该镜像\n"+
-			"原始错误: %v", registry, err),
-		Err: err,
-	}
+    return &DiptError{
+        Type: ErrorUnauthorized,
+        Message: fmt.Sprintf("访问镜像仓库 %s 未授权\n建议：\n"+
+            "1. 检查 ~/.dipt_config 或 ./config.json 是否存在且格式正确\n"+
+            "2. 验证用户名和密码是否正确\n"+
+            "3. 确认是否有权限访问该镜像\n"+
+            "原始错误: %v", registry, err),
+        Err: err,
+    }
 }
 
 // NewNetworkError 创建网络错误
@@ -82,18 +85,47 @@ func NewNetworkError(err error) *DiptError {
 
 // IsManifestUnknownError 检查是否是清单未找到错误
 func IsManifestUnknownError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "MANIFEST_UNKNOWN")
+    if err == nil {
+        return false
+    }
+    var te *transport.Error
+    if errors.As(err, &te) {
+        for _, e := range te.Errors {
+            if e.Code == transport.ManifestUnknownErrorCode {
+                return true
+            }
+        }
+    }
+    return strings.Contains(strings.ToUpper(err.Error()), "MANIFEST_UNKNOWN")
 }
 
 // IsPlatformNotSupportedError 检查是否是平台不支持错误
 func IsPlatformNotSupportedError(err error) bool {
-	return err != nil && (strings.Contains(err.Error(), "no child with platform") ||
-		strings.Contains(err.Error(), "MANIFEST_UNKNOWN"))
+    if err == nil {
+        return false
+    }
+    // 常见于未匹配到指定平台的子清单
+    if strings.Contains(strings.ToLower(err.Error()), "no child with platform") {
+        return true
+    }
+    return IsManifestUnknownError(err)
 }
 
 // IsUnauthorizedError 检查是否是未授权错误
 func IsUnauthorizedError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "UNAUTHORIZED")
+    if err == nil {
+        return false
+    }
+    var te *transport.Error
+    if errors.As(err, &te) {
+        for _, e := range te.Errors {
+            if e.Code == transport.UnauthorizedErrorCode || e.Code == transport.DeniedErrorCode {
+                return true
+            }
+        }
+    }
+    s := strings.ToUpper(err.Error())
+    return strings.Contains(s, "UNAUTHORIZED") || strings.Contains(s, "DENIED")
 }
 
 // IsNetworkError 检查是否是网络错误
