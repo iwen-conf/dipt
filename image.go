@@ -1,7 +1,6 @@
 package main
 
 import (
-    "bytes"
     "context"
     "fmt"
     "net/http"
@@ -126,8 +125,15 @@ func pullAndSaveImage(imageName, outputFile string, platform Platform, config Co
 
 // downloadAndSaveImage 下载并保存镜像
 func downloadAndSaveImage(ref name.Reference, outputFile string, desc *remote.Descriptor, options []remote.Option) error {
-    // 通过 Manifest 精确计算需要下载的总字节数（包含 config 与各层的压缩大小）
-    m, err := v1.ParseManifest(bytes.NewReader(desc.Manifest))
+    // 解析平台解析后的镜像清单，只拉取 manifest（不下载层），用于计算总字节数
+    metaImg, err := desc.Image()
+    if err != nil {
+        if IsPlatformNotSupportedError(err) {
+            return NewPlatformNotSupportedError(ref.Name(), "", "", err)
+        }
+        return fmt.Errorf("获取镜像元数据失败: %v", err)
+    }
+    m, err := metaImg.Manifest()
     if err != nil {
         return fmt.Errorf("获取镜像清单失败: %v", err)
     }
@@ -168,8 +174,8 @@ func downloadAndSaveImage(ref name.Reference, outputFile string, desc *remote.De
 
 // isDockerHubImage 判断是否是 Docker Hub 镜像
 func isDockerHubImage(ref name.Reference) bool {
-	registry := ref.Context().Registry.Name()
-	return registry == "docker.io" || registry == "registry-1.docker.io"
+    registry := ref.Context().Registry.Name()
+    return registry == "docker.io" || registry == "registry-1.docker.io" || registry == "index.docker.io"
 }
 
 // createMirrorRef 创建镜像加速器引用
@@ -179,14 +185,19 @@ func createMirrorRef(ref name.Reference, mirror string) (name.Reference, error) 
 	mirror = strings.TrimPrefix(mirror, "https://")
 	mirror = strings.TrimSuffix(mirror, "/")
 
-	// 获取原始镜像名称和标签
-	originalName := ref.Context().RepositoryStr()
-	originalName = strings.TrimPrefix(originalName, "library/")
-	tag := ref.Identifier()
+    // 获取原始镜像名称和标识（保留 library/ 前缀，适配官方镜像）
+    originalName := ref.Context().RepositoryStr()
+    id := ref.Identifier()
 
-	// 构建新的引用
-	newRef := fmt.Sprintf("%s/%s:%s", mirror, originalName, tag)
-	return name.ParseReference(newRef)
+    // 识别是 tag 还是 digest
+    if _, ok := ref.(name.Digest); ok || strings.Contains(id, ":") && strings.HasPrefix(id, "sha256:") {
+        // 使用 @digest 形式
+        newRef := fmt.Sprintf("%s/%s@%s", mirror, originalName, id)
+        return name.ParseReference(newRef)
+    }
+    // 默认用 :tag 形式
+    newRef := fmt.Sprintf("%s/%s:%s", mirror, originalName, id)
+    return name.ParseReference(newRef)
 }
 
 // 从镜像名称中提取软件名和版本
