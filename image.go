@@ -12,6 +12,7 @@ import (
     "github.com/google/go-containerregistry/pkg/authn"
     "github.com/google/go-containerregistry/pkg/name"
     v1 "github.com/google/go-containerregistry/pkg/v1"
+    v1types "github.com/google/go-containerregistry/pkg/v1/types"
     "github.com/google/go-containerregistry/pkg/v1/remote"
     "github.com/google/go-containerregistry/pkg/v1/tarball"
     "github.com/schollz/progressbar/v3"
@@ -141,13 +142,20 @@ func downloadAndSaveImage(ref name.Reference, outputFile string, desc *remote.De
     var totalSize int64
     totalSize += m.Config.Size
     for _, l := range m.Layers {
+        // 非分发层（foreign/nondistributable）不计入下载进度
+        if !v1types.MediaType(l.MediaType).IsDistributable() {
+            continue
+        }
         totalSize += l.Size
     }
 
-	bar := progressbar.NewOptions64(totalSize,
-		progressbar.OptionSetDescription("拉取镜像中"),
-		progressbar.OptionShowBytes(true),
-	)
+    bar := progressbar.NewOptions64(totalSize,
+        progressbar.OptionSetDescription("拉取镜像中"),
+        progressbar.OptionShowBytes(true),
+        progressbar.OptionSetPredictTime(true),
+        progressbar.OptionShowElapsedTimeOnFinish(),
+        progressbar.OptionThrottle(150*time.Millisecond),
+    )
 
 	rt := &progressRoundTripper{rt: http.DefaultTransport, bar: bar}
 	options = append(options, remote.WithTransport(rt))
