@@ -1,4 +1,4 @@
-package main
+package docker
 
 import (
     "context"
@@ -9,6 +9,11 @@ import (
     "strings"
     "time"
 
+    "dipt/internal/errors"
+    "dipt/internal/logger"
+    "dipt/internal/retry"
+    "dipt/internal/types"
+
     "github.com/google/go-containerregistry/pkg/authn"
     "github.com/google/go-containerregistry/pkg/name"
     v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -18,11 +23,31 @@ import (
     "github.com/schollz/progressbar/v3"
 )
 
-// pullAndSaveImage 拉取镜像并保存为 tar 文件，带进度显示
-func pullAndSaveImage(imageName, outputFile string, platform Platform, config Config) error {
+// imagePullOperation 镜像拉取操作
+type imagePullOperation struct {
+	ref           name.Reference
+	outputFile    string
+	options       []remote.Option
+	manager       *MirrorManager
+	currentRef    name.Reference
+	currentMirror string
+}
+
+// PullAndSaveImage 拉取镜像并保存为 tar 文件，带进度显示
+func PullAndSaveImage(imageName, outputFile string, platform types.Platform, config types.Config) error {
+    log := logger.GetLogger()
+    
+    // 检查是否为演练模式
+    if os.Getenv("DIPT_DRY_RUN") == "1" {
+        log.Info("[演练模式] 将拉取镜像 %s 并保存到 %s", imageName, outputFile)
+        log.Info("[演练模式] 平台: %s/%s", platform.OS, platform.Arch)
+        log.Success("[演练模式] 检测完成，未执行实际操作")
+        return nil
+    }
+    
     ref, err := name.ParseReference(imageName)
     if err != nil {
-        return NewImageNotFoundError(imageName, err)
+        return errors.NewImageNotFoundError(imageName, err)
     }
 
 	var auth authn.Authenticator
@@ -54,44 +79,77 @@ func pullAndSaveImage(imageName, outputFile string, platform Platform, config Co
 		Architecture: platform.Arch,
 	}))
 
-	// 尝试使用配置的镜像加速器
-	var lastErr error
-	if len(config.Registry.Mirrors) > 0 && isDockerHubImage(ref) {
-		for _, mirror := range config.Registry.Mirrors {
-			mirrorRef, err := createMirrorRef(ref, mirror)
-			if err != nil {
-				continue
-			}
-
-			desc, err := remote.Get(mirrorRef, options...)
-			if err == nil {
-				ref = mirrorRef
-				fmt.Printf("使用镜像加速器: %s\n", mirror)
-				return downloadAndSaveImage(ref, outputFile, desc, options)
-			}
-			lastErr = err
+	// 处理自定义镜像源
+	if customMirror := os.Getenv("DIPT_CUSTOM_MIRROR"); customMirror != "" {
+		config.Registry.Mirrors = append([]string{customMirror}, config.Registry.Mirrors...)
+		log.Info("使用自定义镜像源: %s", customMirror)
+	}
+	
+	// 尝试使用镜像加速器（如果是 Docker Hub 镜像）
+	if len(config.Registry.Mirrors) > 0 && IsDockerHubImage(ref) {
+		mirrorManager := NewMirrorManager(config.Registry.Mirrors)
+		
+		// 创建拉取操作
+		pullOp := &imagePullOperation{
+			ref:        ref,
+			outputFile: outputFile,
+			options:    options,
+			manager:    mirrorManager,
 		}
+		
+		// 使用重试机制
+		retryConfig := retry.DefaultConfig()
+		retryConfig.MaxRetries = 2  // 每个镜像源最多重试2次
+		
+		err = mirrorManager.TryPullWithMirrors(ref, options, func(mirrorRef name.Reference, mirrorURL string) error {
+			pullOp.currentRef = mirrorRef
+			pullOp.currentMirror = mirrorURL
+			
+			return retry.WithRetry(func() error {
+				desc, err := remote.Get(mirrorRef, options...)
+				if err != nil {
+					return err
+				}
+				return DownloadAndSaveImage(mirrorRef, outputFile, desc, options)
+			}, retryConfig, fmt.Sprintf("拉取镜像 [%s]", mirrorURL))
+		})
+		
+		if err == nil {
+			return nil
+		}
+		
+		log.Warning("镜像加速器失败，尝试使用原始地址")
 	}
 
 	// 如果镜像加速器都失败了，或者不是 Docker Hub 镜像，使用原始地址
-    desc, err := remote.Get(ref, options...)
+	retryConfig := retry.DefaultConfig()
+	
+	var desc *remote.Descriptor
+	err = retry.WithRetry(func() error {
+		var getErr error
+		desc, getErr = remote.Get(ref, options...)
+		return getErr
+	}, retryConfig, fmt.Sprintf("获取镜像元数据 [%s]", imageName))
+	
     if err != nil {
-        if lastErr != nil {
-            fmt.Printf("镜像加速器访问失败，尝试使用原始地址\n")
-        }
 
 		// 特殊处理 docker.dragonflydb.io 的情况
 		if strings.Contains(err.Error(), "ghcr.io") && strings.Contains(imageName, "docker.dragonflydb.io") {
-			fmt.Printf("检测到 docker.dragonflydb.io 重定向到 ghcr.io，尝试直接使用 ghcr.io 地址...\n")
+			log.Info("检测到 docker.dragonflydb.io 重定向到 ghcr.io，尝试直接使用 ghcr.io 地址...")
 			// 将 docker.dragonflydb.io 替换为 ghcr.io
 			newImageName := strings.Replace(imageName, "docker.dragonflydb.io", "ghcr.io", 1)
 			newRef, parseErr := name.ParseReference(newImageName)
 			if parseErr == nil {
-				desc, err = remote.Get(newRef, options...)
+				err = retry.WithRetry(func() error {
+					var getErr error
+					desc, getErr = remote.Get(newRef, options...)
+					return getErr
+				}, retryConfig, fmt.Sprintf("获取镜像元数据 [ghcr.io]"))
+				
 				if err == nil {
 					ref = newRef
-					fmt.Printf("成功使用 ghcr.io 地址: %s\n", newImageName)
-					return downloadAndSaveImage(ref, outputFile, desc, options)
+					log.Success("成功使用 ghcr.io 地址: %s", newImageName)
+					return DownloadAndSaveImage(ref, outputFile, desc, options)
 				}
 			}
 		}
@@ -99,8 +157,8 @@ func pullAndSaveImage(imageName, outputFile string, platform Platform, config Co
 		// 特殊处理 GitHub Container Registry 的认证问题
 		registry := ref.Context().Registry.Name()
 		if (registry == "ghcr.io" || strings.Contains(imageName, "docker.dragonflydb.io")) && strings.Contains(err.Error(), "DENIED") {
-			return &DiptError{
-				Type: ErrorUnauthorized,
+			return &errors.DiptError{
+				Type: errors.ErrorUnauthorized,
 				Message: fmt.Sprintf("访问 GitHub Container Registry 需要认证\n建议：\n"+
 					"1. 对于 DragonflyDB，请使用正确的镜像地址: ghcr.io/dragonflydb/dragonfly:latest\n"+
 					"2. GitHub Container Registry 可能需要 GitHub Personal Access Token\n"+
@@ -111,26 +169,26 @@ func pullAndSaveImage(imageName, outputFile string, platform Platform, config Co
 			}
 		}
 
-		if IsManifestUnknownError(err) {
-			return NewPlatformNotSupportedError(imageName, platform.OS, platform.Arch, err)
-		} else if IsUnauthorizedError(err) {
-			return NewUnauthorizedError(ref.Context().RegistryStr(), err)
-		} else if IsNetworkError(err) {
-			return NewNetworkError(err)
+		if errors.IsManifestUnknownError(err) {
+			return errors.NewPlatformNotSupportedError(imageName, platform.OS, platform.Arch, err)
+		} else if errors.IsUnauthorizedError(err) {
+			return errors.NewUnauthorizedError(ref.Context().RegistryStr(), err)
+		} else if errors.IsNetworkError(err) {
+			return errors.NewNetworkError(err)
 		}
-		return NewImageNotFoundError(imageName, err)
+		return errors.NewImageNotFoundError(imageName, err)
 	}
 
-	return downloadAndSaveImage(ref, outputFile, desc, options)
+	return DownloadAndSaveImage(ref, outputFile, desc, options)
 }
 
-// downloadAndSaveImage 下载并保存镜像
-func downloadAndSaveImage(ref name.Reference, outputFile string, desc *remote.Descriptor, options []remote.Option) error {
+// DownloadAndSaveImage 下载并保存镜像
+func DownloadAndSaveImage(ref name.Reference, outputFile string, desc *remote.Descriptor, options []remote.Option) error {
     // 解析平台解析后的镜像清单，只拉取 manifest（不下载层），用于计算总字节数
     metaImg, err := desc.Image()
     if err != nil {
-        if IsPlatformNotSupportedError(err) {
-            return NewPlatformNotSupportedError(ref.Name(), "", "", err)
+        if errors.IsPlatformNotSupportedError(err) {
+            return errors.NewPlatformNotSupportedError(ref.Name(), "", "", err)
         }
         return fmt.Errorf("获取镜像元数据失败: %v", err)
     }
@@ -157,16 +215,16 @@ func downloadAndSaveImage(ref name.Reference, outputFile string, desc *remote.De
         progressbar.OptionThrottle(150*time.Millisecond),
     )
 
-	rt := &progressRoundTripper{rt: http.DefaultTransport, bar: bar}
+	rt := NewProgressRoundTripper(http.DefaultTransport, bar)
 	options = append(options, remote.WithTransport(rt))
     img, err := remote.Image(ref, options...)
     if err != nil {
-        if IsPlatformNotSupportedError(err) {
-            return NewPlatformNotSupportedError(ref.Name(), "", "", err)
-        } else if IsUnauthorizedError(err) {
-            return NewUnauthorizedError(ref.Context().RegistryStr(), err)
-        } else if IsNetworkError(err) {
-            return NewNetworkError(err)
+        if errors.IsPlatformNotSupportedError(err) {
+            return errors.NewPlatformNotSupportedError(ref.Name(), "", "", err)
+        } else if errors.IsUnauthorizedError(err) {
+            return errors.NewUnauthorizedError(ref.Context().RegistryStr(), err)
+        } else if errors.IsNetworkError(err) {
+            return errors.NewNetworkError(err)
         }
         return fmt.Errorf("拉取镜像失败: %v", err)
     }
@@ -209,27 +267,27 @@ func createMirrorRef(ref name.Reference, mirror string) (name.Reference, error) 
 }
 
 // 从镜像名称中提取软件名和版本
-func parseImageName(imageName string) (software, version string) {
+func ParseImageName(imageName string) (software, version string) {
 	parts := strings.Split(imageName, ":")
 	if len(parts) < 2 {
-		return cleanSoftwareName(parts[0]), "latest"
+		return CleanSoftwareName(parts[0]), "latest"
 	}
 
 	// 处理软件名称中可能包含的路径
-	software = cleanSoftwareName(parts[0])
+	software = CleanSoftwareName(parts[0])
 
 	return software, parts[1]
 }
 
-// cleanSoftwareName 处理软件名称，替换斜杠为下划线，避免被当作目录分隔符
-func cleanSoftwareName(name string) string {
+// CleanSoftwareName 处理软件名称，替换斜杠为下划线，避免被当作目录分隔符
+func CleanSoftwareName(name string) string {
 	// 替换所有斜杠为下划线
 	name = strings.ReplaceAll(name, "/", "_")
 	return name
 }
 
-// generateOutputFileName 生成输出文件名
-func generateOutputFileName(imageName string, platform Platform) string {
-	software, version := parseImageName(imageName)
+// GenerateOutputFileName 生成输出文件名
+func GenerateOutputFileName(imageName string, platform types.Platform) string {
+	software, version := ParseImageName(imageName)
 	return fmt.Sprintf("%s_%s_%s_%s.tar", software, version, platform.OS, platform.Arch)
 }

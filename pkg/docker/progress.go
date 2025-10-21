@@ -1,4 +1,4 @@
-package main
+package docker
 
 import (
 	"io"
@@ -8,13 +8,21 @@ import (
 	"github.com/schollz/progressbar/v3"
 )
 
-// progressRoundTripper 自定义 RoundTripper，用于更新进度条
-type progressRoundTripper struct {
+// ProgressRoundTripper 自定义 RoundTripper，用于更新进度条
+type ProgressRoundTripper struct {
 	rt  http.RoundTripper
 	bar *progressbar.ProgressBar
 }
 
-func (p *progressRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+// NewProgressRoundTripper 创建带进度条的 RoundTripper
+func NewProgressRoundTripper(rt http.RoundTripper, bar *progressbar.ProgressBar) *ProgressRoundTripper {
+	return &ProgressRoundTripper{
+		rt:  rt,
+		bar: bar,
+	}
+}
+
+func (p *ProgressRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := p.rt.RoundTrip(req)
 	if err != nil {
 		return nil, err

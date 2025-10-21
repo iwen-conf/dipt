@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
     "encoding/json"
@@ -9,23 +9,10 @@ import (
     "strings"
     "time"
 
+    "dipt/internal/types"
+
     "golang.org/x/term"
 )
-
-// UserConfig 用户配置结构
-type UserConfig struct {
-	DefaultOS      string   `json:"default_os"`       // 默认操作系统
-	DefaultArch    string   `json:"default_arch"`     // 默认架构
-	DefaultSaveDir string   `json:"default_save_dir"` // 默认保存目录
-	Registry       Registry `json:"registry"`         // 镜像仓库配置
-}
-
-// Registry 镜像仓库配置
-type Registry struct {
-	Mirrors  []string `json:"mirrors,omitempty"`  // 镜像加速器列表
-	Username string   `json:"username,omitempty"` // 用户名
-	Password string   `json:"password,omitempty"` // 密码
-}
 
 const configFileName = ".dipt_config"
 
@@ -38,8 +25,8 @@ func getConfigFilePath() (string, error) {
 	return filepath.Join(homeDir, configFileName), nil
 }
 
-// loadUserConfig 加载用户配置
-func loadUserConfig() (*UserConfig, error) {
+// LoadUserConfig 加载用户配置
+func LoadUserConfig() (*types.UserConfig, error) {
     configPath, err := getConfigFilePath()
     if err != nil {
         return nil, err
@@ -69,17 +56,17 @@ func loadUserConfig() (*UserConfig, error) {
             // 确保目录存在
             _ = os.MkdirAll(defSave, 0755)
 
-            cfg := &UserConfig{
+            cfg := &types.UserConfig{
                 DefaultOS:      defOS,
                 DefaultArch:    defArch,
                 DefaultSaveDir: defSave,
             }
             // 尝试落盘但不阻塞
-            _ = saveUserConfig(cfg)
+            _ = SaveUserConfig(cfg)
             return cfg, nil
         }
         fmt.Printf("未检测到配置文件 %s\n", configPath)
-        return interactiveConfig()
+        return InteractiveConfig()
     }
 
 	data, err := os.ReadFile(configPath)
@@ -87,7 +74,7 @@ func loadUserConfig() (*UserConfig, error) {
 		return nil, fmt.Errorf("读取配置文件失败: %v", err)
 	}
 
-	var config UserConfig
+	var config types.UserConfig
 	err = json.Unmarshal(data, &config)
 	if err != nil {
 		return nil, fmt.Errorf("解析配置文件失败: %v", err)
@@ -96,8 +83,8 @@ func loadUserConfig() (*UserConfig, error) {
 	return &config, nil
 }
 
-// saveUserConfig 保存用户配置
-func saveUserConfig(config *UserConfig) error {
+// SaveUserConfig 保存用户配置
+func SaveUserConfig(config *types.UserConfig) error {
 	configPath, err := getConfigFilePath()
 	if err != nil {
 		return err
@@ -116,9 +103,9 @@ func saveUserConfig(config *UserConfig) error {
 	return nil
 }
 
-// setConfigValue 设置配置值
-func setConfigValue(key, value string) error {
-	config, err := loadUserConfig()
+// SetConfigValue 设置配置值
+func SetConfigValue(key, value string) error {
+	config, err := LoadUserConfig()
 	if err != nil {
 		return err
 	}
@@ -159,16 +146,16 @@ func setConfigValue(key, value string) error {
 		return fmt.Errorf("未知的配置项: %s", key)
 	}
 
-	return saveUserConfig(config)
+	return SaveUserConfig(config)
 }
 
-// handleMirrorCommand 处理镜像加速器相关命令
-func handleMirrorCommand(args []string) error {
+// HandleMirrorCommand 处理镜像加速器相关命令
+func HandleMirrorCommand(args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("缺少子命令，可用命令：list, add, del, clear, test")
 	}
 
-	config, err := loadUserConfig()
+	config, err := LoadUserConfig()
 	if err != nil {
 		return err
 	}
@@ -196,7 +183,7 @@ func handleMirrorCommand(args []string) error {
 			}
 		}
 		config.Registry.Mirrors = append(config.Registry.Mirrors, mirror)
-		err = saveUserConfig(config)
+		err = SaveUserConfig(config)
 		if err != nil {
 			return err
 		}
@@ -220,7 +207,7 @@ func handleMirrorCommand(args []string) error {
 			return fmt.Errorf("未找到指定的镜像加速器: %s", mirror)
 		}
 		config.Registry.Mirrors = newMirrors
-		err = saveUserConfig(config)
+		err = SaveUserConfig(config)
 		if err != nil {
 			return err
 		}
@@ -228,7 +215,7 @@ func handleMirrorCommand(args []string) error {
 
 	case "clear":
 		config.Registry.Mirrors = []string{}
-		err = saveUserConfig(config)
+		err = SaveUserConfig(config)
 		if err != nil {
 			return err
 		}
@@ -285,8 +272,8 @@ func handleMirrorCommand(args []string) error {
 	return nil
 }
 
-// loadProjectConfig 加载项目级配置 ./config.json（如果存在）
-func loadProjectConfig() (*Config, error) {
+// LoadProjectConfig 加载项目级配置 ./config.json（如果存在）
+func LoadProjectConfig() (*types.Config, error) {
     data, err := os.ReadFile("config.json")
     if err != nil {
         if os.IsNotExist(err) {
@@ -294,16 +281,16 @@ func loadProjectConfig() (*Config, error) {
         }
         return nil, fmt.Errorf("读取项目配置失败: %v", err)
     }
-    var cfg Config
+    var cfg types.Config
     if err := json.Unmarshal(data, &cfg); err != nil {
         return nil, fmt.Errorf("解析项目配置失败: %v", err)
     }
     return &cfg, nil
 }
 
-// effectiveRegistry 合并生效的 Registry（优先级：环境变量 > 项目配置 > 用户配置）
-func effectiveRegistry(user *UserConfig, project *Config) Config {
-    var out Config
+// EffectiveRegistry 合并生效的 Registry（优先级：环境变量 > 项目配置 > 用户配置）
+func EffectiveRegistry(user *types.UserConfig, project *types.Config) types.Config {
+    var out types.Config
     // 先复制用户配置
     if user != nil {
         out.Registry.Mirrors = append(out.Registry.Mirrors, user.Registry.Mirrors...)
@@ -346,16 +333,16 @@ func effectiveRegistry(user *UserConfig, project *Config) Config {
     return out
 }
 
-// loadEffectiveConfigs 载入用户配置与项目配置，并返回合并后的 Registry 配置
-func loadEffectiveConfigs() (*UserConfig, Config, error) {
-    userCfg, err := loadUserConfig()
+// LoadEffectiveConfigs 载入用户配置与项目配置，并返回合并后的 Registry 配置
+func LoadEffectiveConfigs() (*types.UserConfig, types.Config, error) {
+    userCfg, err := LoadUserConfig()
     if err != nil {
-        return nil, Config{}, err
+        return nil, types.Config{}, err
     }
-    projCfg, err := loadProjectConfig()
+    projCfg, err := LoadProjectConfig()
     if err != nil {
-        return nil, Config{}, err
+        return nil, types.Config{}, err
     }
-    eff := effectiveRegistry(userCfg, projCfg)
+    eff := EffectiveRegistry(userCfg, projCfg)
     return userCfg, eff, nil
 }

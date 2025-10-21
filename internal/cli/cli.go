@@ -1,17 +1,30 @@
-package main
+package cli
 
 import (
     "encoding/json"
     "fmt"
     "os"
     "path/filepath"
+    "strings"
+
+    "dipt/internal/config"
+    "dipt/internal/types"
+    "dipt/pkg/docker"
 )
 
-// parseArgs 解析命令行参数（使用传入的默认配置用于缺省值）
-func parseArgs(defaults *UserConfig) (imageName string, outputFile string, platform Platform, err error) {
+// CLIOptions 命令行选项
+type CLIOptions struct {
+    Verbose  bool   // 详细输出
+    DryRun   bool   // 仅检测不执行
+    Fix      bool   // 自动修复
+    Mirror   string // 指定镜像源
+}
+
+// ParseArgs 解析命令行参数（使用传入的默认配置用于缺省值）
+func ParseArgs(defaults *types.UserConfig) (imageName string, outputFile string, platform types.Platform, verbose bool, err error) {
     args := os.Args[1:]
     if len(args) == 0 {
-        return "", "", Platform{}, fmt.Errorf("用法:\n" +
+        return "", "", types.Platform{}, false, fmt.Errorf("用法:\n" +
             "拉取镜像: dipt [-os <系统>] [-arch <架构>] <镜像名称> [输出文件]\n" +
             "设置默认值: dipt set <os|arch|save_dir> <值>\n" +
             "生成配置模板: dipt -conf new\n" +
@@ -19,23 +32,29 @@ func parseArgs(defaults *UserConfig) (imageName string, outputFile string, platf
             "  dipt mirror list          # 列出所有镜像加速器\n" +
             "  dipt mirror add <URL>     # 添加镜像加速器\n" +
             "  dipt mirror del <URL>     # 删除镜像加速器\n" +
-            "  dipt mirror clear         # 清空所有镜像加速器")
+            "  dipt mirror clear         # 清空所有镜像加速器\n" +
+            "  dipt mirror test <URL>    # 测试镜像加速器\n" +
+            "\n选项:\n" +
+            "  --verbose                 # 显示详细日志\n" +
+            "  --mirror=<URL>            # 指定镜像源\n" +
+            "  --fix                     # 自动修复问题\n" +
+            "  --dry-run                 # 仅检测不修改")
     }
 
 	// 处理生成配置模板命令
 	if len(args) == 2 && args[0] == "-conf" && args[1] == "new" {
-		err := generateConfigTemplate()
+		err := GenerateConfigTemplate()
 		if err != nil {
-			return "", "", Platform{}, err
+			return "", "", types.Platform{}, false, err
 		}
 		os.Exit(0)
 	}
 
 	// 处理镜像加速器命令
 	if args[0] == "mirror" {
-		err := handleMirrorCommand(args[1:])
+		err := config.HandleMirrorCommand(args[1:])
 		if err != nil {
-			return "", "", Platform{}, err
+			return "", "", types.Platform{}, false, err
 		}
 		os.Exit(0)
 	}
@@ -43,38 +62,49 @@ func parseArgs(defaults *UserConfig) (imageName string, outputFile string, platf
 	// 处理配置命令
 	if args[0] == "set" {
 		if len(args) != 3 {
-			return "", "", Platform{}, fmt.Errorf("设置配置的用法: dipt set <os|arch|save_dir> <值>")
+			return "", "", types.Platform{}, false, fmt.Errorf("设置配置的用法: dipt set <os|arch|save_dir> <值>")
 		}
-		err := setConfigValue(args[1], args[2])
+		err := config.SetConfigValue(args[1], args[2])
 		if err != nil {
-			return "", "", Platform{}, err
+			return "", "", types.Platform{}, false, err
 		}
 		fmt.Printf("✅ 已设置 %s = %s\n", args[1], args[2])
 		os.Exit(0)
 	}
 
     // 设置默认值
-    platform = Platform{
+    platform = types.Platform{
         OS:   defaults.DefaultOS,
         Arch: defaults.DefaultArch,
     }
 
 	// 解析参数
+	var customMirror string
+	var dryRun, fix bool
+	
 	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "-os":
+		switch {
+		case args[i] == "-os":
 			if i+1 >= len(args) {
-				return "", "", Platform{}, fmt.Errorf("-os 参数需要指定系统名称")
+				return "", "", types.Platform{}, false, fmt.Errorf("-os 参数需要指定系统名称")
 			}
 			platform.OS = args[i+1]
 			i++
-		case "-arch":
+		case args[i] == "-arch":
 			if i+1 >= len(args) {
-				return "", "", Platform{}, fmt.Errorf("-arch 参数需要指定架构名称")
+				return "", "", types.Platform{}, false, fmt.Errorf("-arch 参数需要指定架构名称")
 			}
 			platform.Arch = args[i+1]
 			i++
-		default:
+		case args[i] == "--verbose" || args[i] == "-v":
+			verbose = true
+		case args[i] == "--dry-run":
+			dryRun = true
+		case args[i] == "--fix":
+			fix = true
+		case strings.HasPrefix(args[i], "--mirror="):
+			customMirror = strings.TrimPrefix(args[i], "--mirror=")
+		case !strings.HasPrefix(args[i], "-"):
 			// 如果不是选项参数，则认为是镜像名称或输出文件
 			if imageName == "" {
 				imageName = args[i]
@@ -83,23 +113,35 @@ func parseArgs(defaults *UserConfig) (imageName string, outputFile string, platf
 			}
 		}
 	}
+	
+	// 处理特殊选项
+	if customMirror != "" {
+		// TODO: 在后续实现中使用自定义镜像源
+		os.Setenv("DIPT_CUSTOM_MIRROR", customMirror)
+	}
+	if dryRun {
+		os.Setenv("DIPT_DRY_RUN", "1")
+	}
+	if fix {
+		os.Setenv("DIPT_AUTO_FIX", "1")
+	}
 
 	if imageName == "" {
-		return "", "", Platform{}, fmt.Errorf("必须指定镜像名称")
+		return "", "", types.Platform{}, false, fmt.Errorf("必须指定镜像名称")
 	}
 
     // 如果没有指定输出文件，则根据镜像信息生成并放在默认保存目录
     if outputFile == "" {
-        outputFile = generateOutputFileName(imageName, platform)
+        outputFile = docker.GenerateOutputFileName(imageName, platform)
         outputFile = filepath.Join(defaults.DefaultSaveDir, outputFile)
     }
 
-    return imageName, outputFile, platform, nil
+    return imageName, outputFile, platform, verbose, nil
 }
 
-// generateConfigTemplate 生成配置文件模板
-func generateConfigTemplate() error {
-	config := Config{}
+// GenerateConfigTemplate 生成配置文件模板
+func GenerateConfigTemplate() error {
+	config := types.Config{}
 	config.Registry.Mirrors = []string{
 		"https://registry.docker-cn.com",
 		"https://docker.mirrors.ustc.edu.cn",

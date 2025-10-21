@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"bufio"
@@ -6,15 +6,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"dipt/internal/types"
 )
 
-// interactiveConfig 交互式配置
-func interactiveConfig() (*UserConfig, error) {
+// InteractiveConfig 交互式配置
+func InteractiveConfig() (*types.UserConfig, error) {
 	fmt.Println("👋 欢迎使用 DIPT！")
 	fmt.Println("📝 首次运行需要进行一些基本设置...")
 
 	reader := bufio.NewReader(os.Stdin)
-	config := &UserConfig{}
+	config := &types.UserConfig{}
 
 	// 设置默认操作系统
 	fmt.Printf("\n💻 请选择默认的操作系统 [linux/windows/darwin] (默认: linux): ")
@@ -78,7 +80,7 @@ func interactiveConfig() (*UserConfig, error) {
 	config.DefaultSaveDir = absPath
 
 	// 保存配置
-	if err := saveUserConfig(config); err != nil {
+	if err := SaveUserConfig(config); err != nil {
 		return nil, fmt.Errorf("保存配置失败: %v", err)
 	}
 
