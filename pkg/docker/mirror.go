@@ -6,10 +6,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-	
-	"dipt/internal/logger"
-	"dipt/internal/color"
-	
+
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
@@ -44,7 +41,7 @@ func NewMirrorManager(mirrorURLs []string) *MirrorManager {
 	return &MirrorManager{
 		mirrors: mirrors,
 		httpClient: &http.Client{
-			Timeout: 5 * time.Second,
+			Timeout: 10 * time.Second,
 		},
 	}
 }
@@ -97,10 +94,9 @@ func (m *MirrorManager) TestMirror(mirrorURL string) (bool, time.Duration, error
 }
 
 // CheckAllMirrors 检查所有镜像源的可用性
-func (m *MirrorManager) CheckAllMirrors() {
-	log := logger.GetLogger()
-	log.Stage("检测镜像源可用性")
-	
+func (m *MirrorManager) CheckAllMirrors(logFunc func(level, msg string)) {
+	logFunc("info", "检测镜像源可用性")
+
 	var wg sync.WaitGroup
 	results := make(chan struct {
 		index     int
@@ -108,7 +104,7 @@ func (m *MirrorManager) CheckAllMirrors() {
 		latency   time.Duration
 		err       error
 	}, len(m.mirrors))
-	
+
 	// 并发检测所有镜像源
 	for i := range m.mirrors {
 		wg.Add(1)
@@ -124,13 +120,13 @@ func (m *MirrorManager) CheckAllMirrors() {
 			}{idx, available, latency, err}
 		}(i)
 	}
-	
+
 	// 等待所有检测完成
 	go func() {
 		wg.Wait()
 		close(results)
 	}()
-	
+
 	// 收集结果
 	for result := range results {
 		m.mu.Lock()
@@ -138,13 +134,13 @@ func (m *MirrorManager) CheckAllMirrors() {
 		m.mirrors[result.index].Latency = result.latency
 		m.mirrors[result.index].LastCheck = time.Now()
 		m.mu.Unlock()
-		
+
 		if result.available {
-			log.Success("镜像源 %s 可用 (延迟: %v)", 
-				m.mirrors[result.index].URL, result.latency)
+			logFunc("success", fmt.Sprintf("镜像源 %s 可用 (延迟: %v)",
+				m.mirrors[result.index].URL, result.latency))
 		} else {
-			log.Warning("镜像源 %s 不可用: %v", 
-				m.mirrors[result.index].URL, result.err)
+			logFunc("warning", fmt.Sprintf("镜像源 %s 不可用: %v",
+				m.mirrors[result.index].URL, result.err))
 		}
 	}
 }
@@ -178,47 +174,46 @@ func (m *MirrorManager) GetAvailableMirrors() []Mirror {
 
 // TryPullWithMirrors 尝试使用镜像源拉取镜像
 func (m *MirrorManager) TryPullWithMirrors(
-	ref name.Reference, 
-	options []remote.Option, 
+	ref name.Reference,
+	options []remote.Option,
+	logFunc func(level, msg string),
 	callback func(mirrorRef name.Reference, mirrorURL string) error,
 ) error {
-	log := logger.GetLogger()
-	
 	// 先检查所有镜像源
-	m.CheckAllMirrors()
-	
+	m.CheckAllMirrors(logFunc)
+
 	// 获取可用的镜像源
 	availableMirrors := m.GetAvailableMirrors()
-	
+
 	if len(availableMirrors) == 0 {
-		log.Warning("没有可用的镜像源，将使用原始地址")
+		logFunc("warning", "没有可用的镜像源，将使用原始地址")
 		return callback(ref, "")
 	}
-	
+
 	var lastErr error
-	
+
 	// 尝试每个可用的镜像源
 	for _, mirror := range availableMirrors {
-		log.Info("尝试使用镜像源: %s", mirror.URL)
-		
+		logFunc("info", fmt.Sprintf("尝试使用镜像源: %s", mirror.URL))
+
 		// 创建镜像引用
 		mirrorRef, err := CreateMirrorReference(ref, mirror.URL)
 		if err != nil {
-			log.Warning("创建镜像引用失败: %v", err)
+			logFunc("warning", fmt.Sprintf("创建镜像引用失败: %v", err))
 			continue
 		}
-		
+
 		// 尝试拉取
 		err = callback(mirrorRef, mirror.URL)
 		if err == nil {
 			// 成功
-			color.Success("成功使用镜像源: %s", mirror.URL)
+			logFunc("success", fmt.Sprintf("成功使用镜像源: %s", mirror.URL))
 			return nil
 		}
-		
+
 		lastErr = err
-		log.Warning("镜像源 %s 拉取失败: %v", mirror.URL, err)
-		
+		logFunc("warning", fmt.Sprintf("镜像源 %s 拉取失败: %v", mirror.URL, err))
+
 		// 标记该镜像源暂时不可用
 		m.mu.Lock()
 		for i := range m.mirrors {
@@ -229,14 +224,14 @@ func (m *MirrorManager) TryPullWithMirrors(
 		}
 		m.mu.Unlock()
 	}
-	
+
 	// 所有镜像源都失败了，尝试使用原始地址
-	log.Warning("所有镜像源都失败，尝试使用原始地址")
+	logFunc("warning", "所有镜像源都失败，尝试使用原始地址")
 	err := callback(ref, "")
 	if err != nil {
 		return fmt.Errorf("所有镜像源和原始地址都失败: %w", lastErr)
 	}
-	
+
 	return nil
 }
 

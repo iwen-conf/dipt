@@ -4,10 +4,9 @@ import (
 	"fmt"
 	"sync"
 	"time"
-
-	"dipt/internal/color"
 )
 
+// LogLevel 日志级别
 type LogLevel int
 
 const (
@@ -18,13 +17,14 @@ const (
 	LevelSuccess
 )
 
+// Logger 日志器（TUI 兼容）
 type Logger struct {
-	mu       sync.Mutex
-	verbose  bool
-	colorOut bool
-	stats    Stats
+	mu      sync.Mutex
+	verbose bool
+	stats   Stats
 }
 
+// Stats 统计信息
 type Stats struct {
 	Successes int
 	Warnings  int
@@ -40,8 +40,6 @@ var once sync.Once
 func GetLogger() *Logger {
 	once.Do(func() {
 		instance = &Logger{
-			verbose:  false,
-			colorOut: true,
 			stats: Stats{
 				StartTime: time.Now(),
 			},
@@ -54,12 +52,7 @@ func GetLogger() *Logger {
 func (l *Logger) Init(verbose bool) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-
 	l.verbose = verbose
-	
-	// 禁用日志文件写入功能
-	// 仅使用终端输出
-	
 	return nil
 }
 
@@ -67,7 +60,6 @@ func (l *Logger) Init(verbose bool) error {
 func (l *Logger) Close() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	
 	if l.stats.EndTime.IsZero() {
 		l.stats.EndTime = time.Now()
 	}
@@ -78,28 +70,16 @@ func (l *Logger) SetVerbose(verbose bool) {
 	l.verbose = verbose
 }
 
-// logToFile 写入日志到文件（已禁用）
-func (l *Logger) logToFile(level LogLevel, message string) {
-	// 日志文件写入功能已禁用
-	// 仅使用终端彩色输出
-	return
-}
-
-// Debug 输出调试信息
+// Debug 输出调试信息（TUI 模式下静默）
 func (l *Logger) Debug(format string, args ...interface{}) {
-	message := fmt.Sprintf(format, args...)
-	l.logToFile(LevelDebug, message)
-	
 	if l.verbose {
-		color.PrintInfo("[DEBUG] " + message)
+		fmt.Printf("[DEBUG] "+format+"\n", args...)
 	}
 }
 
-// Info 输出信息
+// Info 输出信息（TUI 模式下静默）
 func (l *Logger) Info(format string, args ...interface{}) {
-	message := fmt.Sprintf(format, args...)
-	l.logToFile(LevelInfo, message)
-	color.PrintInfo(message)
+	// TUI 模式下不直接输出到终端
 }
 
 // Warning 输出警告
@@ -107,10 +87,6 @@ func (l *Logger) Warning(format string, args ...interface{}) {
 	l.mu.Lock()
 	l.stats.Warnings++
 	l.mu.Unlock()
-	
-	message := fmt.Sprintf(format, args...)
-	l.logToFile(LevelWarning, message)
-	color.PrintWarning(message)
 }
 
 // Error 输出错误
@@ -118,10 +94,6 @@ func (l *Logger) Error(format string, args ...interface{}) {
 	l.mu.Lock()
 	l.stats.Errors++
 	l.mu.Unlock()
-	
-	message := fmt.Sprintf(format, args...)
-	l.logToFile(LevelError, message)
-	color.PrintError(message)
 }
 
 // Success 输出成功信息
@@ -129,24 +101,13 @@ func (l *Logger) Success(format string, args ...interface{}) {
 	l.mu.Lock()
 	l.stats.Successes++
 	l.mu.Unlock()
-	
-	message := fmt.Sprintf(format, args...)
-	l.logToFile(LevelSuccess, message)
-	color.PrintSuccess(message)
 }
 
-// Progress 输出进度信息
-func (l *Logger) Progress(format string, args ...interface{}) {
-	message := fmt.Sprintf(format, args...)
-	l.logToFile(LevelInfo, message)
-	color.Progress(format, args...)
-}
+// Progress 输出进度信息（TUI 模式下静默）
+func (l *Logger) Progress(format string, args ...interface{}) {}
 
-// Stage 输出阶段信息
-func (l *Logger) Stage(stage string) {
-	l.logToFile(LevelInfo, "=== " + stage + " ===")
-	color.PrintStage(stage)
-}
+// Stage 输出阶段信息（TUI 模式下静默）
+func (l *Logger) Stage(stage string) {}
 
 // GetStats 获取统计信息
 func (l *Logger) GetStats() Stats {
@@ -155,38 +116,10 @@ func (l *Logger) GetStats() Stats {
 	return l.stats
 }
 
-// PrintSummary 打印总结报告
-func (l *Logger) PrintSummary() {
-	l.mu.Lock()
-	if l.stats.EndTime.IsZero() {
-		l.stats.EndTime = time.Now()
-	}
-	l.mu.Unlock()
-	
-	stats := l.GetStats()
-	duration := stats.EndTime.Sub(stats.StartTime)
-	
-	color.PrintStage("执行总结")
-	
-	fmt.Println()
-	fmt.Printf("✅ 修复成功项: %s\n", color.GreenText(fmt.Sprintf("%d", stats.Successes)))
-	fmt.Printf("⚠️  检测警告项: %s\n", color.YellowText(fmt.Sprintf("%d", stats.Warnings)))
-	fmt.Printf("❌ 未修复错误: %s\n", color.RedText(fmt.Sprintf("%d", stats.Errors)))
-	fmt.Printf("⏱️  总耗时: %s\n", color.CyanText(duration.Round(time.Millisecond).String()))
-	fmt.Println()
-	
-	if stats.Errors > 0 {
-		color.PrintWarning("部分任务执行失败")
-	} else if stats.Warnings > 0 {
-		color.PrintInfo("任务完成，但存在一些警告")
-	} else {
-		color.PrintSuccess("所有任务执行成功！")
-	}
-}
+// PrintSummary TUI 模式下不打印总结
+func (l *Logger) PrintSummary() {}
 
-// SaveReport 保存报告到文件（已禁用）
+// SaveReport 保存报告（已禁用）
 func (l *Logger) SaveReport(filename string) error {
-	// 报告保存功能已禁用
-	// 仅在终端显示总结信息
 	return nil
 }

@@ -10,8 +10,6 @@ import (
     "time"
 
     "dipt/internal/types"
-
-    "golang.org/x/term"
 )
 
 const configFileName = ".dipt_config"
@@ -32,13 +30,11 @@ func LoadUserConfig() (*types.UserConfig, error) {
         return nil, err
     }
 
-    // 如果配置文件不存在，启动交互式配置
+    // 如果配置文件不存在，返回 nil 让 TUI 处理首次配置
     if _, err := os.Stat(configPath); os.IsNotExist(err) {
-        // 支持在非交互环境或设置了禁用交互时，使用默认配置
+        // 从环境变量读取默认值，否则返回 nil
         noInteractive := os.Getenv("DIPT_NO_INTERACTIVE") == "1"
-        isTTY := term.IsTerminal(int(os.Stdin.Fd()))
-        if noInteractive || !isTTY {
-            // 从环境变量读取默认值，否则使用内置默认
+        if noInteractive {
             defOS := os.Getenv("DIPT_DEFAULT_OS")
             if defOS == "" {
                 defOS = "linux"
@@ -52,8 +48,6 @@ func LoadUserConfig() (*types.UserConfig, error) {
             if defSave == "" {
                 defSave = filepath.Join(homeDir, "DockerImages")
             }
-
-            // 确保目录存在
             _ = os.MkdirAll(defSave, 0755)
 
             cfg := &types.UserConfig{
@@ -61,12 +55,11 @@ func LoadUserConfig() (*types.UserConfig, error) {
                 DefaultArch:    defArch,
                 DefaultSaveDir: defSave,
             }
-            // 尝试落盘但不阻塞
             _ = SaveUserConfig(cfg)
             return cfg, nil
         }
-        fmt.Printf("未检测到配置文件 %s\n", configPath)
-        return InteractiveConfig()
+        // 返回 nil，让 TUI 的 setup 向导处理
+        return nil, nil
     }
 
 	data, err := os.ReadFile(configPath)
@@ -345,4 +338,26 @@ func LoadEffectiveConfigs() (*types.UserConfig, types.Config, error) {
     }
     eff := EffectiveRegistry(userCfg, projCfg)
     return userCfg, eff, nil
+}
+
+// isValidOS 检查操作系统是否有效
+func isValidOS(os string) bool {
+	validOS := []string{"linux", "windows", "darwin"}
+	for _, v := range validOS {
+		if v == os {
+			return true
+		}
+	}
+	return false
+}
+
+// isValidArch 检查架构是否有效
+func isValidArch(arch string) bool {
+	validArch := []string{"amd64", "arm64", "arm", "386"}
+	for _, v := range validArch {
+		if v == arch {
+			return true
+		}
+	}
+	return false
 }

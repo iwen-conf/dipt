@@ -4,7 +4,8 @@
 *.dll
 *.so
 *.dylib
-dip
+/dipt
+/dist/
 
 # 测试二进制文件
 *.test
@@ -33,3 +34,4 @@ config.json
 # 操作系统文件
 .DS_Store
 Thumbs.db
+.ace-tool/
