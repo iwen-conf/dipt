@@ -4,7 +4,6 @@
 *.dll
 *.so
 *.dylib
-/dipt
 /dist/
 
 # 测试二进制文件

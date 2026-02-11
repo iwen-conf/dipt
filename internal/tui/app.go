@@ -9,7 +9,7 @@ import (
 	"dipt/internal/tui/components"
 	"dipt/internal/tui/theme"
 	"dipt/internal/types"
-	"dipt/pkg/docker"
+	"dipt/internal/docker"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

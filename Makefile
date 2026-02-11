@@ -1,5 +1,5 @@
 APP      := dipt
-CMD      := ./cmd/dipt
+CMD      := .
 DIST     := dist
 VERSION  := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS  := -s -w -X main.version=$(VERSION)
@@ -14,7 +14,8 @@ PLATFORMS := \
 
 # 默认: 编译当前平台
 build:
-	go build -ldflags "$(LDFLAGS)" -o $(APP) $(CMD)
+	@mkdir -p $(DIST)
+	go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(APP) $(CMD)
 
 # 交叉编译所有平台
 all: clean $(PLATFORMS)
